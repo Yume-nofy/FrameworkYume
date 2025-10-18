@@ -1,34 +1,58 @@
+
+
 package nofy.p17;
+
 import java.io.IOException;
 import java.io.PrintWriter;
 
+import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
-public class FrontServlet extends HttpServlet
-{
-    protected void processRequest(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-        PrintWriter out = response.getWriter();
-        String requestedPage = request.getPathInfo();
-        String url = request.getRequestURL().toString();
+public class FrontServlet extends HttpServlet {
+
+    RequestDispatcher defaultDispatcher;
+
+    @Override
+    public void init() {
+        defaultDispatcher = getServletContext().getNamedDispatcher("default");
+    }
+
+    @Override
+    protected void service(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        String path = req.getRequestURI().substring(req.getContextPath().length());
         
-        out.println(url);
+        boolean resourceExists = getServletContext().getResource(path) != null;
 
-        out.close();
+        if (resourceExists) {
+            defaultServe(req, res);
+        } else {
+            customServe(req, res);
+        }
     }
 
-    @Override
-    protected void doGet(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-        processRequest(request, response);
+    private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
+        try (PrintWriter out = res.getWriter()) {
+            String uri = req.getRequestURI();
+            String responseBody = """
+                <html>
+                    <head><title>404 Not Found</title></head>
+                    <body>
+                        
+                        <p>The requested URL was not found: <strong>%s</strong></p>
+                    </body>
+                </html>
+                """.formatted(uri);
+
+            res.setContentType("text/html;charset=UTF-8");
+            out.println(responseBody);
+        }
     }
 
-    @Override
-    protected void doPost(HttpServletRequest request, HttpServletResponse response)
-            throws ServletException, IOException {
-        processRequest(request, response);
+    private void defaultServe(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
+        defaultDispatcher.forward(req, res);
     }
+
 }
