@@ -1,28 +1,37 @@
 #!/bin/bash
 
-# Paramètres
+# === VARIABLES ===
 SRC_DIR="src/nofy/p17"
+WEBAPP_DIR="../test_sprint/web"
+BUILD_DIR="../test_sprint/build"
+CLASSES_DIR="$BUILD_DIR/WEB-INF/classes"
 LIB_DIR="lib"
-CLASSES_DIR="../test_sprint/web/WEB-INF/classes"  # ← Directement dans web/
+JAR_NAME="framework.jar"
+LIB_TEST="../test_sprint/lib"
 
-echo "=== COMPILATION ==="
+# === PRÉPARATION ===
+echo "=== PRÉPARATION DU BUILD ==="
+# Créer le répertoire de build
+mkdir -p $CLASSES_DIR
 
-# Créer le dossier de sortie s'il n'existe pas
-mkdir -p "$CLASSES_DIR"
+# === COMPILATION ===
+echo "=== COMPILATION DES CLASSES JAVA ==="
+javac -cp "$LIB_DIR/*" -d $CLASSES_DIR $SRC_DIR/*.java
 
-# Compilation
-echo "Compilation des sources..."
-if ! javac -cp "$LIB_DIR/*" -d "$CLASSES_DIR" $SRC_DIR/*.java; then
-    echo "❌ Échec de la compilation"
-    exit 1
-fi
+# === COPIE DES FICHIERS WEBAPP ===
+echo "=== COPIE DES FICHIERS WEBAPP ==="
+cp -R $WEBAPP_DIR/* $BUILD_DIR
 
-# Vérification
-if [ -f "$CLASSES_DIR/nofy/p17/FrontServlet.class" ]; then
-    echo "✅ Compilation réussie - FrontServlet.class trouvé"
-else
-    echo "❌ FrontServlet.class introuvable après compilation"
-    exit 1
-fi
+# === CRÉATION DU JAR ===
+echo "=== CRÉATION DU JAR ==="
+jar -cvf "$LIB_DIR/$JAR_NAME" -C "$CLASSES_DIR" .
 
-echo "✅ Compilation terminée avec succès"
+# === DÉPLOIEMENT ===
+echo "=== DÉPLOIEMENT DU JAR DANS LE PROJET TEST ==="
+cp "$LIB_DIR/$JAR_NAME" "$LIB_TEST"
+
+# === NETTOYAGE ===
+echo "=== NETTOYAGE ==="
+rm -rf $BUILD_DIR
+
+echo "=== DÉPLOIEMENT TERMINÉ ==="
