@@ -16,14 +16,14 @@ public class FrontServlet extends HttpServlet {
 
     private RequestDispatcher defaultDispatcher;
     private MyScanner controllerScanner;
-    private Map<String, RouteInfo> routeMap;
+    private Map<String, Class<?>> baseUrlToController;
 
     @Override
     public void init() throws ServletException {
         defaultDispatcher = getServletContext().getNamedDispatcher("default");
         controllerScanner = new MyScanner();
-        routeMap = new HashMap<>();
-        
+        baseUrlToController = new HashMap<>();
+
         // Scanner et initialiser les contrôleurs au démarrage
         initializeControllers();
     }
@@ -31,7 +31,7 @@ public class FrontServlet extends HttpServlet {
 private void initializeControllers() throws ServletException {
     try {
         // Scanner le package des contrôleurs
-        controllerScanner.scanControllersFromPackage("nofy.controllers");
+        controllerScanner.scanControllersFromPackage("nofy.p17");
         
         // Construire la map des routes
         for (Class<?> controller : controllerScanner.getControllers()) {
@@ -44,25 +44,12 @@ private void initializeControllers() throws ServletException {
             if (!baseUrl.startsWith("/")) {
                 baseUrl = "/" + baseUrl; // Normaliser l'URL
             }
-            
-            for (Method method : controller.getDeclaredMethods()) {
-                if (method.isAnnotationPresent(MyMap.class)) {
-                    MyMap myMapAnnotation = method.getAnnotation(MyMap.class);
-                    String methodUrl = myMapAnnotation.url();
-                    
-                    if (!methodUrl.startsWith("/")) {
-                        methodUrl = "/" + methodUrl; // Normaliser
-                    }
-                    
-                    String fullUrl = baseUrl + methodUrl;
-                    
-                    routeMap.put(fullUrl, new RouteInfo(controller, method));
-                    System.out.println("✅ Route enregistrée: " + fullUrl + " -> " + method.getName());
-                }
-            }
+
+            // Enregistrer le contrôleur pour son baseUrl
+            baseUrlToController.put(baseUrl, controller);
         }
         
-        System.out.println("🎯 " + routeMap.size() + " routes chargées");
+        System.out.println("🎯 " + baseUrlToController.size() + " contrôleurs chargés");
         
     } catch (Exception e) {
         throw new ServletException("Erreur lors de l'initialisation des contrôleurs", e);
@@ -78,136 +65,54 @@ private void initializeControllers() throws ServletException {
         if (resourceExists) {
             defaultServe(req, res);
         } else {
-            // Vérifier si c'est une route de contrôleur
-            RouteInfo route = findMatchingRoute(path);
-            if (route != null) {
-                invokeController(route, req, res);
-            } else {
-                customServe(req, res);
-            }
+            customServe(req, res);
         }
     }
 
-    private RouteInfo findMatchingRoute(String path) {
-        // Recherche exacte d'abord
-        RouteInfo exactMatch = routeMap.get(path);
-        if (exactMatch != null) {
-            return exactMatch;
-        }
-        
-        // Recherche avec matching de pattern (pour les paramètres)
-        for (Map.Entry<String, RouteInfo> entry : routeMap.entrySet()) {
-            if (UrlMatcher.matches(entry.getKey(), path)) {
-                return entry.getValue();
-            }
-        }
-        
-        return null;
-    }
 
-    private void invokeController(RouteInfo route, HttpServletRequest req, HttpServletResponse res) {
-        try {
-            // Créer une instance du contrôleur
-            Object controllerInstance = route.getControllerClass().getDeclaredConstructor().newInstance();
-            
-            // Appeler la méthode du contrôleur
-            Object result = route.getMethod().invoke(controllerInstance);
-            
-            // Gérer la réponse
-            if (result instanceof String) {
-                handleStringResponse((String) result, req, res);
-            } else {
-                // Par défaut, retourner le résultat comme JSON
-                handleJsonResponse(result, res);
-            }
-            
-        } catch (Exception e) {
-            handleControllerError(e, res);
-        }
-    }
-
-    private void handleStringResponse(String result, HttpServletRequest req, HttpServletResponse res) 
-            throws ServletException, IOException {
-        // Si le résultat contient "redirect:", faire une redirection
-        if (result.startsWith("redirect:")) {
-            String redirectUrl = result.substring("redirect:".length());
-            res.sendRedirect(redirectUrl);
-            return;
-        }
-        
-        // Sinon, traiter comme une vue JSP
-        String viewPath = "/WEB-INF/views/" + result + ".jsp";
-        if (getServletContext().getResource(viewPath) != null) {
-            RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
-            dispatcher.forward(req, res);
-        } else {
-            // Si pas de vue JSP, retourner le texte directement
-            res.setContentType("text/html;charset=UTF-8");
-            res.getWriter().println(result);
-        }
-    }
-
-    private void handleJsonResponse(Object result, HttpServletResponse res) throws IOException {
-        res.setContentType("application/json;charset=UTF-8");
-        // Simplifié - dans une vraie implémentation, utiliser Gson ou Jackson
-        String json = "{\"result\": \"" + result.toString() + "\"}";
-        res.getWriter().println(json);
-    }
-
-    private void handleControllerError(Exception e, HttpServletResponse res) {
-        try {
-            res.setStatus(500);
-            res.setContentType("text/html;charset=UTF-8");
-            PrintWriter out = res.getWriter();
-            out.println("""
-                <html>
-                    <head><title>500 Internal Server Error</title></head>
-                    <body>
-                        <h1>Erreur dans le contrôleur</h1>
-                        <p><strong>Message:</strong> %s</p>
-                    </body>
-                </html>
-                """.formatted(e.getMessage()));
-        } catch (IOException ioException) {
-            ioException.printStackTrace();
-        }
-    }
 
     private void customServe(HttpServletRequest req, HttpServletResponse res) throws IOException {
-        try (PrintWriter out = res.getWriter()) {
-            String uri = req.getRequestURI();
-            String responseBody = """
-                <html>
-                    <head><title>404 Not Found</title></head>
-                    <body>
-                        <h1>404 - Page non trouvée</h1>
-                        <p>The requested URL was not found: <strong>%s</strong></p>
-                        <p><em>Aucun contrôleur trouvé pour cette URL.</em></p>
-                    </body>
-                </html>
-                """.formatted(uri);
+    try (PrintWriter out = res.getWriter()) {
+        String uri = req.getRequestURI();
+        String path = uri.substring(req.getContextPath().length());
 
-            res.setContentType("text/html;charset=UTF-8");
-            res.setStatus(404);
-            out.println(responseBody);
+        // Vérifier si le path commence par un baseUrl de contrôleur
+        for (Map.Entry<String, Class<?>> entry : baseUrlToController.entrySet()) {
+            String baseUrl = entry.getKey();
+            if (path.startsWith(baseUrl)) {
+                displayControllerInfo(entry.getValue(), baseUrl, res);
+                return;
+            }
         }
+
+        // Si aucun contrôleur ne correspond
+        res.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        out.println(" requested URL was not found: " + path);
     }
+}
+
+    private void displayControllerInfo(Class<?> controllerClass, String baseUrl, HttpServletResponse res) throws IOException {
+    try (PrintWriter out = res.getWriter()) {
+        out.println("<h2>Controller: " + controllerClass.getSimpleName() + ".class</h2>");
+        out.println("<p>Base URL: " + baseUrl + "</p>");
+        out.println("<h3>Méthodes supportées :</h3>");
+        out.println("<ul>");
+
+        for (Method method : controllerClass.getDeclaredMethods()) {
+            MyMap mapping = method.getAnnotation(MyMap.class);
+            if (mapping != null) {
+                out.println("<li>" + method.getName() + "() ➜ " + mapping.url() + "</li>");
+            }
+        }
+
+        out.println("</ul>");
+        out.println("<p>Retourne Spring ✅</p>");
+    }
+}
 
     private void defaultServe(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
         defaultDispatcher.forward(req, res);
     }
 
-    // Classe interne pour stocker les informations de route
-    private static class RouteInfo {
-        private Class<?> controllerClass;
-        private Method method;
-        
-        public RouteInfo(Class<?> controllerClass, Method method) {
-            this.controllerClass = controllerClass;
-            this.method = method;
-        }
-        
-        public Class<?> getControllerClass() { return controllerClass; }
-        public Method getMethod() { return method; }
-    }
-}
+
+}      
