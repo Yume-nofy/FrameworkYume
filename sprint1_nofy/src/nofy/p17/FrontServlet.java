@@ -164,14 +164,18 @@ public class FrontServlet extends HttpServlet {
         
         // Cas 2 : Le contrôleur retourne un ModelView
         else if (result instanceof ModelView) {
-            ModelView mv = (ModelView) result;
-            
-            // Rediriger vers la vue (ex: /profile.jsp)
-            String viewPath = "/" + mv.getView();
-            RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
-            dispatcher.forward(req, res);
-        } 
+        ModelView mv = (ModelView) result;
         
+        // Transférer les données de la Map vers l'objet Request
+        for (Map.Entry<String, Object> entry : mv.getData().entrySet()) {
+            req.setAttribute(entry.getKey(), entry.getValue());
+        }
+        
+        // Rediriger vers la vue (ex: /profile.jsp)
+        String viewPath = "/" + mv.getView();
+        RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
+        dispatcher.forward(req, res);
+    }
         // Cas 3 : Tout autre type de retour (peut être étendu pour JSON, etc.)
         else {
             res.setContentType("text/plain;charset=UTF-8");
