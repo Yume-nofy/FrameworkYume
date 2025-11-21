@@ -223,7 +223,6 @@ public class FrontServlet extends HttpServlet {
     for (int i = 0; i < paramTypes.length; i++) {
         Class<?> paramType = paramTypes[i];
         java.lang.reflect.Parameter parameter = parameters[i];
-        String paramName = parameter.getName();
         
         // Support pour HttpServletRequest et HttpServletResponse
         if (paramType.equals(HttpServletRequest.class)) {
@@ -233,18 +232,28 @@ public class FrontServlet extends HttpServlet {
             args[i] = res;
         }
         else {
-            // Récupération du paramètre depuis la requête
-            String paramValue = req.getParameter(paramName);
+            String paramName;
+            String paramValue;
+            
+            // Vérifier si le paramètre a l'annotation @RequestParam
+            RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
+            if (requestParam != null) {
+                // Utiliser le nom spécifié dans @RequestParam
+                paramName = requestParam.value();
+                paramValue = req.getParameter(paramName);
+                System.out.println("🔍 @RequestParam: " + paramName + " = " + paramValue);
+            } else {
+                // Utiliser le nom du paramètre Java (comportement actuel)
+                paramName = parameter.getName();
+                paramValue = req.getParameter(paramName);
+                System.out.println("🔍 Paramètre auto: " + paramName + " = " + paramValue);
+            }
             
             if (paramValue == null || paramValue.trim().isEmpty()) {
-                // Pour les types primitifs, on ne peut pas avoir null
                 if (paramType.isPrimitive()) {
-                    throw new IllegalArgumentException(
-                        "Paramètre primitif requis manquant: " + paramName + 
-                        " (type: " + paramType.getSimpleName() + ")"
-                    );
+                    throw new IllegalArgumentException("Paramètre primitif requis manquant: " + paramName);
                 }
-                args[i] = null; // OK pour les types objets (Integer, String, etc.)
+                args[i] = null;
             } else {
                 args[i] = convertParameterValue(paramValue, paramType);
             }
