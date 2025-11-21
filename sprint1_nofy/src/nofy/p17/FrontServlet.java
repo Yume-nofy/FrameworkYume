@@ -99,7 +99,7 @@ public class FrontServlet extends HttpServlet {
                     
                     if (targetMethod != null) {
                         Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
-                        Object result = targetMethod.invoke(controllerInstance);
+                        Object result = invokeMethodWithParams(targetMethod, controllerInstance, req, res);
                         handleControllerResult(result, req, res);
                         return;
                     }
@@ -164,14 +164,18 @@ public class FrontServlet extends HttpServlet {
         
         // Cas 2 : Le contrôleur retourne un ModelView
         else if (result instanceof ModelView) {
-            ModelView mv = (ModelView) result;
-            
-            // Rediriger vers la vue (ex: /profile.jsp)
-            String viewPath = "/" + mv.getView();
-            RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
-            dispatcher.forward(req, res);
-        } 
+        ModelView mv = (ModelView) result;
         
+        // Transférer les données de la Map vers l'objet Request
+        for (Map.Entry<String, Object> entry : mv.getData().entrySet()) {
+            req.setAttribute(entry.getKey(), entry.getValue());
+        }
+        
+        // Rediriger vers la vue (ex: /profile.jsp)
+        String viewPath = "/" + mv.getView();
+        RequestDispatcher dispatcher = req.getRequestDispatcher(viewPath);
+        dispatcher.forward(req, res);
+    }
         // Cas 3 : Tout autre type de retour (peut être étendu pour JSON, etc.)
         else {
             res.setContentType("text/plain;charset=UTF-8");
@@ -208,4 +212,66 @@ public class FrontServlet extends HttpServlet {
             out.println("<p>Retourne Spring ✅</p>");
         }
     }
+    private Object invokeMethodWithParams(Method method, Object controllerInstance, 
+                                     HttpServletRequest req, HttpServletResponse res) 
+        throws Exception {
+    
+    Class<?>[] paramTypes = method.getParameterTypes();
+    java.lang.reflect.Parameter[] parameters = method.getParameters();
+    Object[] args = new Object[paramTypes.length];
+    
+    for (int i = 0; i < paramTypes.length; i++) {
+        Class<?> paramType = paramTypes[i];
+        java.lang.reflect.Parameter parameter = parameters[i];
+        String paramName = parameter.getName();
+        
+        // Support pour HttpServletRequest et HttpServletResponse
+        if (paramType.equals(HttpServletRequest.class)) {
+            args[i] = req;
+        }
+        else if (paramType.equals(HttpServletResponse.class)) {
+            args[i] = res;
+        }
+        else {
+            // Récupération du paramètre depuis la requête
+            String paramValue = req.getParameter(paramName);
+            
+            if (paramValue == null || paramValue.trim().isEmpty()) {
+                // Pour les types primitifs, on ne peut pas avoir null
+                if (paramType.isPrimitive()) {
+                    throw new IllegalArgumentException(
+                        "Paramètre primitif requis manquant: " + paramName + 
+                        " (type: " + paramType.getSimpleName() + ")"
+                    );
+                }
+                args[i] = null; // OK pour les types objets (Integer, String, etc.)
+            } else {
+                args[i] = convertParameterValue(paramValue, paramType);
+            }
+        }
+    }
+    
+    return method.invoke(controllerInstance, args);
+}
+
+private Object convertParameterValue(String value, Class<?> targetType) {
+    
+    try {
+        if (targetType.equals(String.class)) {
+            return value;
+        } else if (targetType.equals(int.class) || targetType.equals(Integer.class)) {
+            return Integer.parseInt(value);
+        } else if (targetType.equals(long.class) || targetType.equals(Long.class)) {
+            return Long.parseLong(value);
+        } else if (targetType.equals(double.class) || targetType.equals(Double.class)) {
+            return Double.parseDouble(value);
+        } else if (targetType.equals(boolean.class) || targetType.equals(Boolean.class)) {
+            return Boolean.parseBoolean(value);
+        } else {
+            throw new IllegalArgumentException("Type non supporté: " + targetType.getName());
+        }
+    } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("Erreur de conversion pour la valeur: " + value, e);
+    }
+}
 }
