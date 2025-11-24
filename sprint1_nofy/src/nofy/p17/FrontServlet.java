@@ -138,28 +138,55 @@ public class FrontServlet extends HttpServlet {
     
     // Recherche de la méthode par son annotation @MyMap
 private Method findTargetMethod(Class<?> controllerClass, String path, Map<String, String> pathParams) {
+    Method exactMatch = null;
+    Method patternMatch = null;
+    Map<String, String> tempPathParams = new HashMap<>();
 
     for (Method method : controllerClass.getDeclaredMethods()) {
-        MyMap annotation = method.getAnnotation(MyMap.class);
-        if (annotation == null) continue;
+        MyMap map = method.getAnnotation(MyMap.class);
+        if (map == null) continue;
 
-        String route = annotation.url();       // ex : "/etudiant/{id}"
-        String regex = convertToRegex(route);    // ex : "/etudiant/(?<id>[^/]+)"
+        String route = map.url();
 
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("^" + regex + "$");
-        java.util.regex.Matcher matcher = pattern.matcher(path);
-
-        if (matcher.matches()) {
-            // Extraire les paramètres dynamiques : {id}, {age}, etc.
-            for (String name : extractGroupNames(route)) {
-                pathParams.put(name, matcher.group(name));
-            }
-            return method;
+        // Exact match
+        if (!route.contains("{") && route.equals(path)) {
+            exactMatch = method;
+            break;
         }
+
+        // Pattern match
+        if (route.contains("{")) {
+            String regex = convertToRegex(route); // ex: "/etudiant/{id}" -> "/etudiant/([^/]+)"
+            Pattern pattern = Pattern.compile("^" + regex + "$");
+            Matcher matcher = pattern.matcher(path);
+
+            if (matcher.matches()) {
+                tempPathParams.clear();
+
+                // Extraire les noms des variables depuis la route
+                List<String> varNames = new ArrayList<>();
+                Matcher m = Pattern.compile("\\{([^/]+)\\}").matcher(route);
+                while (m.find()) varNames.add(m.group(1));
+
+                for (int i = 0; i < varNames.size(); i++) {
+                    tempPathParams.put(varNames.get(i), matcher.group(i + 1));
+                }
+
+                patternMatch = method;
+            }
+        }
+    }
+
+    if (exactMatch != null) return exactMatch;
+
+    if (patternMatch != null) {
+        pathParams.putAll(tempPathParams);
+        return patternMatch;
     }
 
     return null;
 }
+
 
     public void handleControllerResult(Object result, HttpServletRequest req, HttpServletResponse res) throws Exception {
         
@@ -235,79 +262,65 @@ private Method findTargetMethod(Class<?> controllerClass, String path, Map<Strin
             out.println("<p>Retourne Spring ✅</p>");
         }
     }
-   private Object invokeMethodWithParams(
-        Method method,
-        Object instance,
-        HttpServletRequest req,
-        HttpServletResponse res,
-        Map<String, String> pathParams
-) throws Exception {
+  private Object invokeMethodWithParams(Method method,
+                                      Object controllerInstance,
+                                      HttpServletRequest req,
+                                      HttpServletResponse res,
+                                      Map<String, String> pathParams) throws Exception {
 
     Class<?>[] paramTypes = method.getParameterTypes();
     java.lang.reflect.Parameter[] parameters = method.getParameters();
     Object[] args = new Object[paramTypes.length];
 
     for (int i = 0; i < paramTypes.length; i++) {
-
         Class<?> paramType = paramTypes[i];
         java.lang.reflect.Parameter parameter = parameters[i];
+        String paramName=null;
+        String paramValue = null;
 
-        String paramName = parameter.getName(); // NOM DU PARAMÈTRE
-                                                // nécessite -parameters
-
-        // ============================
-        // 1️⃣ Injection paramètre URL
-        //    Exemple : /user/{id}
-        // ============================
-        if (pathParams.containsKey(paramName)) {
-            String raw = pathParams.get(paramName);
-            args[i] = convertParameterValue(raw, paramType);
-            continue;
-        }
-
-        // ============================
-        // 2️⃣ Injection HttpServletRequest & HttpServletResponse
-        // ============================
+        // 1️⃣ HttpServletRequest / HttpServletResponse
         if (paramType.equals(HttpServletRequest.class)) {
             args[i] = req;
             continue;
-        }
-
-        if (paramType.equals(HttpServletResponse.class)) {
+        } else if (paramType.equals(HttpServletResponse.class)) {
             args[i] = res;
             continue;
         }
 
-        // ============================
-        // 3️⃣ Injection @RequestParam
-        // ============================
+        // 2️⃣ Path params depuis URL
+        if (pathParams.containsKey(parameter.getName())) {
+            paramName = parameter.getName();
+            paramValue = pathParams.get(paramName);
+        }
+
+        // 3️⃣ RequestParam (GET ou POST)
         RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
-
-        String paramValue = null;
-
         if (requestParam != null) {
             paramName = requestParam.value();
             paramValue = req.getParameter(paramName);
-        } else {
+        } else if (paramValue == null) {
+            // fallback sur nom du paramètre
+            paramName = parameter.getName();
             paramValue = req.getParameter(paramName);
         }
 
-        // ============================
-        // 4️⃣ Aucun paramètre trouvé
-        // ============================
+        // 4️⃣ Conversion
         if (paramValue == null || paramValue.trim().isEmpty()) {
             if (paramType.isPrimitive()) {
-                throw new IllegalArgumentException("Paramètre primitif manquant : " + paramName);
+                throw new IllegalArgumentException("Paramètre primitif requis manquant: " + paramName);
             }
             args[i] = null;
-            continue;
+        } else {
+            args[i] = convertParameterValue(paramValue, paramType);
         }
 
-        args[i] = convertParameterValue(paramValue, paramType);
+        System.out.println("🔹 Injection param: " + paramName + " = " + paramValue);
     }
 
-    return method.invoke(instance, args);
+    // Invocation finale
+    return method.invoke(controllerInstance, args);
 }
+
 
 private Object convertParameterValue(String value, Class<?> targetType) {
     
