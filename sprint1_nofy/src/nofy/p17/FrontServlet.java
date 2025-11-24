@@ -3,14 +3,20 @@ package nofy.p17;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.lang.reflect.Method;
+import java.lang.reflect.Parameter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 
 public class FrontServlet extends HttpServlet {
 
@@ -95,14 +101,17 @@ public class FrontServlet extends HttpServlet {
                          actionPath = "/"; 
                     }
                     
-                    Method targetMethod = findTargetMethod(controllerClass, actionPath);
-                    
-                    if (targetMethod != null) {
-                        Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
-                        Object result = invokeMethodWithParams(targetMethod, controllerInstance, req, res);
-                        handleControllerResult(result, req, res);
-                        return;
-                    }
+                    Map<String, String> pathParams = new HashMap<>();
+
+                Method targetMethod = findTargetMethod(controllerClass, actionPath, pathParams);
+
+                if (targetMethod != null) {
+                    Object controllerInstance = controllerClass.getDeclaredConstructor().newInstance();
+                    Object result = invokeMethodWithParams(targetMethod, controllerInstance, req, res, pathParams);
+                    handleControllerResult(result, req, res);
+                    return;
+                }
+
                     
                     displayControllerInfo(controllerClass, baseUrl, res);
                     return;
@@ -128,15 +137,29 @@ public class FrontServlet extends HttpServlet {
     }
     
     // Recherche de la méthode par son annotation @MyMap
-    private Method findTargetMethod(Class<?> controllerClass, String actionPath) {
-        for (Method method : controllerClass.getDeclaredMethods()) {
-            MyMap mapping = method.getAnnotation(MyMap.class);
-            if (mapping != null && mapping.url().equals(actionPath)) {
-                return method;
+private Method findTargetMethod(Class<?> controllerClass, String path, Map<String, String> pathParams) {
+
+    for (Method method : controllerClass.getDeclaredMethods()) {
+        MyMap annotation = method.getAnnotation(MyMap.class);
+        if (annotation == null) continue;
+
+        String route = annotation.url();       // ex : "/etudiant/{id}"
+        String regex = convertToRegex(route);    // ex : "/etudiant/(?<id>[^/]+)"
+
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("^" + regex + "$");
+        java.util.regex.Matcher matcher = pattern.matcher(path);
+
+        if (matcher.matches()) {
+            // Extraire les paramètres dynamiques : {id}, {age}, etc.
+            for (String name : extractGroupNames(route)) {
+                pathParams.put(name, matcher.group(name));
             }
+            return method;
         }
-        return null; // Aucune méthode trouvée
     }
+
+    return null;
+}
 
     public void handleControllerResult(Object result, HttpServletRequest req, HttpServletResponse res) throws Exception {
         
@@ -212,55 +235,78 @@ public class FrontServlet extends HttpServlet {
             out.println("<p>Retourne Spring ✅</p>");
         }
     }
-    private Object invokeMethodWithParams(Method method, Object controllerInstance, 
-                                     HttpServletRequest req, HttpServletResponse res) 
-        throws Exception {
-    
+   private Object invokeMethodWithParams(
+        Method method,
+        Object instance,
+        HttpServletRequest req,
+        HttpServletResponse res,
+        Map<String, String> pathParams
+) throws Exception {
+
     Class<?>[] paramTypes = method.getParameterTypes();
     java.lang.reflect.Parameter[] parameters = method.getParameters();
     Object[] args = new Object[paramTypes.length];
-    
+
     for (int i = 0; i < paramTypes.length; i++) {
+
         Class<?> paramType = paramTypes[i];
         java.lang.reflect.Parameter parameter = parameters[i];
-        
-        // Support pour HttpServletRequest et HttpServletResponse
+
+        String paramName = parameter.getName(); // NOM DU PARAMÈTRE
+                                                // nécessite -parameters
+
+        // ============================
+        // 1️⃣ Injection paramètre URL
+        //    Exemple : /user/{id}
+        // ============================
+        if (pathParams.containsKey(paramName)) {
+            String raw = pathParams.get(paramName);
+            args[i] = convertParameterValue(raw, paramType);
+            continue;
+        }
+
+        // ============================
+        // 2️⃣ Injection HttpServletRequest & HttpServletResponse
+        // ============================
         if (paramType.equals(HttpServletRequest.class)) {
             args[i] = req;
+            continue;
         }
-        else if (paramType.equals(HttpServletResponse.class)) {
+
+        if (paramType.equals(HttpServletResponse.class)) {
             args[i] = res;
+            continue;
         }
-        else {
-            String paramName;
-            String paramValue;
-            
-            // Vérifier si le paramètre a l'annotation @RequestParam
-            RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
-            if (requestParam != null) {
-                // Utiliser le nom spécifié dans @RequestParam
-                paramName = requestParam.value();
-                paramValue = req.getParameter(paramName);
-                System.out.println("🔍 @RequestParam: " + paramName + " = " + paramValue);
-            } else {
-                // Utiliser le nom du paramètre Java (comportement actuel)
-                paramName = parameter.getName();
-                paramValue = req.getParameter(paramName);
-                System.out.println("🔍 Paramètre auto: " + paramName + " = " + paramValue);
-            }
-            
-            if (paramValue == null || paramValue.trim().isEmpty()) {
-                if (paramType.isPrimitive()) {
-                    throw new IllegalArgumentException("Paramètre primitif requis manquant: " + paramName);
-                }
-                args[i] = null;
-            } else {
-                args[i] = convertParameterValue(paramValue, paramType);
-            }
+
+        // ============================
+        // 3️⃣ Injection @RequestParam
+        // ============================
+        RequestParam requestParam = parameter.getAnnotation(RequestParam.class);
+
+        String paramValue = null;
+
+        if (requestParam != null) {
+            paramName = requestParam.value();
+            paramValue = req.getParameter(paramName);
+        } else {
+            paramValue = req.getParameter(paramName);
         }
+
+        // ============================
+        // 4️⃣ Aucun paramètre trouvé
+        // ============================
+        if (paramValue == null || paramValue.trim().isEmpty()) {
+            if (paramType.isPrimitive()) {
+                throw new IllegalArgumentException("Paramètre primitif manquant : " + paramName);
+            }
+            args[i] = null;
+            continue;
+        }
+
+        args[i] = convertParameterValue(paramValue, paramType);
     }
-    
-    return method.invoke(controllerInstance, args);
+
+    return method.invoke(instance, args);
 }
 
 private Object convertParameterValue(String value, Class<?> targetType) {
@@ -283,4 +329,17 @@ private Object convertParameterValue(String value, Class<?> targetType) {
         throw new IllegalArgumentException("Erreur de conversion pour la valeur: " + value, e);
     }
 }
+private String convertToRegex(String route) {
+    // Remplace {id} par (?<id>[^/]+)
+    return route.replaceAll("\\{([^/]+)\\}", "(?<$1>[^/]+)");
+}
+private Iterable<String> extractGroupNames(String route) {
+    java.util.List<String> names = new java.util.ArrayList<>();
+    java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\{([^/]+)\\}").matcher(route);
+    while (m.find()) {
+        names.add(m.group(1)); // ajoute "id", "code", etc.
+    }
+    return names;
+}
+
 }
