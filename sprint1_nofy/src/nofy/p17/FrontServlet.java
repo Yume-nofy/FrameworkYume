@@ -138,7 +138,29 @@ public class FrontServlet extends HttpServlet {
                 args[i] = res;
                 continue;
             }
+            if (Map.class.isAssignableFrom(paramType)) {
+                Map<String, String[]> parameterMap = req.getParameterMap();
+                Map<String, Object> formMap = new HashMap<>(); 
+    
+            for (Map.Entry<String, String[]> entry : parameterMap.entrySet()) {
+                String key = entry.getKey();
+                String[] values = entry.getValue();
+        
+        if (values.length == 1) {
+            // S'il y a une seule valeur (cas normal : texte, radio, checkbox simple)
+            formMap.put(key, values[0]);
+            
+        } else if (values.length > 1) {
+            // S'il y a plusieurs valeurs (cas : multiples checkboxes ou select multiple)
+            formMap.put(key, values); // <-- Mettre le tableau de String[]
+            
+        }
+        // Si values.length == 0, on n'ajoute rien (ce cas n'arrive normalement pas 
+        // car la clé n'est pas dans parameterMap si aucune valeur n'est fournie)
+    }
 
+    args[i] = formMap;
+    continue;}
             // Path params
             if (pathParams.containsKey(parameter.getName())) {
                 paramName = parameter.getName();
