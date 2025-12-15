@@ -142,25 +142,44 @@ public class FrontServlet extends HttpServlet {
                 Map<String, String[]> parameterMap = req.getParameterMap();
                 Map<String, Object> formMap = new HashMap<>(); 
     
-            for (Map.Entry<String, String[]> entry : parameterMap.entrySet()) {
-                String key = entry.getKey();
-                String[] values = entry.getValue();
-        
-        if (values.length == 1) {
-            // S'il y a une seule valeur (cas normal : texte, radio, checkbox simple)
-            formMap.put(key, values[0]);
-            
-        } else if (values.length > 1) {
-            // S'il y a plusieurs valeurs (cas : multiples checkboxes ou select multiple)
-            formMap.put(key, values); // <-- Mettre le tableau de String[]
-            
-        }
-        // Si values.length == 0, on n'ajoute rien (ce cas n'arrive normalement pas 
-        // car la clé n'est pas dans parameterMap si aucune valeur n'est fournie)
-    }
+                for (Map.Entry<String, String[]> entry : parameterMap.entrySet()) {
+                        String key = entry.getKey();
+                        String[] values = entry.getValue();
+
+                if (values.length == 1) {
+                    // S'il y a une seule valeur (cas normal : texte, radio, checkbox simple)
+                    formMap.put(key, values[0]);
+
+                } else if (values.length > 1) {
+                    // S'il y a plusieurs valeurs (cas : multiples checkboxes ou select multiple)
+                    formMap.put(key, values); // <-- Mettre le tableau de String[]
+
+                }
+                // Si values.length == 0, on n'ajoute rien (ce cas n'arrive normalement pas 
+                // car la clé n'est pas dans parameterMap si aucune valeur n'est fournie)
+                }
 
     args[i] = formMap;
     continue;}
+            if (!paramType.isPrimitive() && 
+                !paramType.equals(String.class) && 
+                !paramType.getName().startsWith("java.") &&
+                !paramType.getName().startsWith("jakarta.")) {
+                
+                try {
+                    Object pojoInstance = paramType.getDeclaredConstructor().newInstance();
+                    Map<String, String[]> parameterMap = req.getParameterMap();
+                    
+                    // APPEL À LA MÉTHODE QUI FAIT LE BINDING PAR RÉFLEXION (bindParametersToPojo)
+                    bindParametersToPojo(pojoInstance, parameterMap); 
+                    
+                    args[i] = pojoInstance;
+                    continue;
+                    
+                } catch (NoSuchMethodException e) {
+                    throw new ServletException("La classe argument " + paramType.getName() + " doit avoir un constructeur sans argument pour le binding.", e);
+                }
+            }
             // Path params
             if (pathParams.containsKey(parameter.getName())) {
                 paramName = parameter.getName();
@@ -190,17 +209,17 @@ public class FrontServlet extends HttpServlet {
     }
 
     private Object convertParameterValue(String value, Class<?> targetType) {
-        try {
-            if (targetType.equals(String.class)) return value;
-            else if (targetType.equals(int.class) || targetType.equals(Integer.class)) return Integer.parseInt(value);
-            else if (targetType.equals(long.class) || targetType.equals(Long.class)) return Long.parseLong(value);
-            else if (targetType.equals(double.class) || targetType.equals(Double.class)) return Double.parseDouble(value);
-            else if (targetType.equals(boolean.class) || targetType.equals(Boolean.class)) return Boolean.parseBoolean(value);
-            else throw new IllegalArgumentException("Type non supporté: " + targetType.getName());
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Erreur de conversion pour la valeur: " + value, e);
-        }
+    try {
+        if (targetType.equals(String.class)) return value;
+        else if (targetType.equals(int.class) || targetType.equals(Integer.class)) return Integer.parseInt(value);
+        else if (targetType.equals(long.class) || targetType.equals(Long.class)) return Long.parseLong(value);
+        else if (targetType.equals(double.class) || targetType.equals(Double.class)) return Double.parseDouble(value);
+        else if (targetType.equals(boolean.class) || targetType.equals(Boolean.class)) return Boolean.parseBoolean(value);
+        else throw new IllegalArgumentException("Type non supporté: " + targetType.getName());
+    } catch (NumberFormatException e) {
+        throw new IllegalArgumentException("Erreur de conversion pour la valeur: " + value, e);
     }
+}
 
     public void handleControllerResult(Object result, HttpServletRequest req, HttpServletResponse res) throws Exception {
         if (result == null) {
@@ -242,5 +261,70 @@ public class FrontServlet extends HttpServlet {
         Matcher m = Pattern.compile("\\{([^/]+)\\}").matcher(route);
         while (m.find()) names.add(m.group(1));
         return names;
+    }
+    private void bindParametersToPojo(Object pojoInstance, Map<String, String[]> parameterMap) {
+        Class<?> pojoClass = pojoInstance.getClass();
+
+        for (Map.Entry<String, String[]> entry : parameterMap.entrySet()) {
+            String paramName = entry.getKey();
+            String[] values = entry.getValue();
+            
+            // Normalisation : nom du paramètre -> nom de la propriété
+            String fieldName = paramName; 
+
+            try {
+                // 1. Tenter d'utiliser un Setter (Méthode setPropertyName)
+                String setterName = "set" + Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
+                
+                // On essaie de trouver un setter adapté aux types simples ou aux tableaux (pour les checkboxes multiples)
+                Method setter = null;
+                
+                // Recherche d'un setter pour un type simple (ex: setNom(String))
+                try {
+                    setter = pojoClass.getMethod(setterName, String.class);
+                    if (values.length == 1) {
+                         setter.invoke(pojoInstance, values[0]);
+                         continue;
+                    }
+                } catch (NoSuchMethodException ignored) { /* on ignore, on essaie l'autre type de setter */ }
+
+                // Recherche d'un setter pour un tableau de String (ex: setInterets(String[]))
+                try {
+                    setter = pojoClass.getMethod(setterName, String[].class);
+                    if (values.length > 1) {
+                        setter.invoke(pojoInstance, (Object) values); // Le cast (Object) est nécessaire pour éviter l'ambiguïté avec l'appel varargs
+                        continue;
+                    }
+                } catch (NoSuchMethodException ignored) { /* on ignore, on essaie le champ direct */ }
+                
+                
+                // 2. Tenter d'accéder directement au champ (si le champ est public)
+                try {
+                    java.lang.reflect.Field field = pojoClass.getDeclaredField(fieldName);
+                    field.setAccessible(true); // Permet d'accéder aux champs privés
+                    
+                    if (field.getType().equals(String.class) && values.length == 1) {
+                        field.set(pojoInstance, values[0]);
+                    } else if (field.getType().equals(String[].class) && values.length > 1) {
+                        field.set(pojoInstance, values);
+                    } else {
+                        // Pour les autres types de champs (int, Integer, Date, etc.)
+                        if (values.length == 1) {
+                            Object convertedValue = convertParameterValue(values[0], field.getType());
+                            field.set(pojoInstance, convertedValue);
+                        }
+                    }
+                    continue;
+
+                } catch (NoSuchFieldException ignored) { /* on ignore */ }
+                
+                // Gérer les cas où le paramètre n'a pas de champ/setter correspondant
+                // (Souvent ignoré, car tous les paramètres de formulaire ne correspondent pas à des champs de la classe)
+                
+            } catch (Exception e) {
+                // Erreur lors de l'invocation du setter ou de l'accès au champ
+                System.err.println("Erreur de binding pour le champ " + paramName + " dans la classe " + pojoClass.getName() + ": " + e.getMessage());
+            }
+        }
     }
 }
