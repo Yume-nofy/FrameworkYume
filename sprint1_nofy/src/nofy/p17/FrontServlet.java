@@ -13,6 +13,7 @@ import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+@jakarta.servlet.annotation.MultipartConfig
 public class FrontServlet extends HttpServlet {
 
     private RequestDispatcher defaultDispatcher;
@@ -147,6 +148,23 @@ public class FrontServlet extends HttpServlet {
             } else if (paramType.equals(HttpServletResponse.class)) {
                 args[i] = res;
                 continue;
+            }
+            if (Map.class.isAssignableFrom(paramType) && isStringByteArrayMap(parameter)) {
+                if (req.getContentType() != null && req.getContentType().startsWith("multipart/form-data")) {
+                    Map<String, byte[]> fileMap = new HashMap<>();
+
+                    // Extraction des fichiers
+                    for (jakarta.servlet.http.Part part : req.getParts()) {
+                        String fileName = part.getSubmittedFileName();
+                        if (fileName != null && !fileName.isEmpty()) {
+                            // On utilise le nom du fichier comme clé et le contenu comme valeur
+                            byte[] fileContent = part.getInputStream().readAllBytes();
+                            fileMap.put(fileName, fileContent);
+                        }
+                    }
+                    args[i] = fileMap;
+                    continue;
+                }
             }
             if (Map.class.isAssignableFrom(paramType)) {
                 Map<String, String[]> parameterMap = req.getParameterMap();
@@ -355,4 +373,22 @@ public void handleControllerResult(Object result, HttpServletRequest req, HttpSe
             }
         }
     }
+    private boolean isStringByteArrayMap(java.lang.reflect.Parameter parameter) {
+    java.lang.reflect.Type type = parameter.getParameterizedType();
+    if (type instanceof java.lang.reflect.ParameterizedType) {
+        java.lang.reflect.ParameterizedType pType = (java.lang.reflect.ParameterizedType) type;
+        java.lang.reflect.Type[] args = pType.getActualTypeArguments();
+        
+        if (args.length == 2) {
+            boolean keyIsString = args[0].equals(String.class);
+            boolean valueIsByteArray = false;
+            if (args[1] instanceof Class) {
+                Class<?> clz = (Class<?>) args[1];
+                valueIsByteArray = clz.isArray() && clz.getComponentType().equals(byte.class);
+            }
+            return keyIsString && valueIsByteArray;
+        }
+    }
+    return false;
+}
 }
