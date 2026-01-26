@@ -166,6 +166,16 @@ public class FrontServlet extends HttpServlet {
                     continue;
                 }
             }
+                if (parameter.isAnnotationPresent(Session.class)) {
+    if (Map.class.isAssignableFrom(paramType)) {
+        // On récupère ou crée la session
+        jakarta.servlet.http.HttpSession session = req.getSession();
+        args[i] = createSessionMap(session);
+        continue;
+    } else {
+        throw new ServletException("L'annotation @Session ne peut être utilisée que sur un type Map<String, Object>");
+    }
+}
             if (Map.class.isAssignableFrom(paramType)) {
                 Map<String, String[]> parameterMap = req.getParameterMap();
                 Map<String, Object> formMap = new HashMap<>(); 
@@ -189,6 +199,7 @@ public class FrontServlet extends HttpServlet {
 
     args[i] = formMap;
     continue;}
+
             if (!paramType.isPrimitive() && 
                 !paramType.equals(String.class) && 
                 !paramType.getName().startsWith("java.") &&
@@ -390,5 +401,38 @@ public void handleControllerResult(Object result, HttpServletRequest req, HttpSe
         }
     }
     return false;
+}
+private Map<String, Object> createSessionMap(jakarta.servlet.http.HttpSession session) {
+    return new AbstractMap<String, Object>() {
+        @Override
+        public Object put(String key, Object value) {
+            Object old = session.getAttribute(key);
+            session.setAttribute(key, value);
+            return old;
+        }
+
+        @Override
+        public Object get(Object key) {
+            return session.getAttribute(key.toString());
+        }
+
+        @Override
+        public Object remove(Object key) {
+            Object old = session.getAttribute(key.toString());
+            session.removeAttribute(key.toString());
+            return old;
+        }
+
+        @Override
+        public Set<Entry<String, Object>> entrySet() {
+            Set<Entry<String, Object>> set = new HashSet<>();
+            java.util.Enumeration<String> names = session.getAttributeNames();
+            while (names.hasMoreElements()) {
+                String name = names.nextElement();
+                set.add(new SimpleEntry<>(name, session.getAttribute(name)));
+            }
+            return set;
+        }
+    };
 }
 }
